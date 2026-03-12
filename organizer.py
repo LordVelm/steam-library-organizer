@@ -34,6 +34,8 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 CACHE_DIR = Path(__file__).parent / ".cache"
 LIBRARY_CACHE = CACHE_DIR / "library.json"
 PROGRESS_CACHE = CACHE_DIR / "classification_progress.json"
+CLASSIFICATIONS_FILE = CACHE_DIR / "classifications_final.json"
+OVERRIDES_FILE = CONFIG_DIR / "overrides.json"
 
 
 # ── Saved configuration ───────────────────────────────────────────────────────
@@ -314,6 +316,7 @@ def write_collections_to_steam(
     existing = get_existing_collections(cloud_data)
     version = get_next_version(cloud_data)
     timestamp = int(time.time())
+    modified_keys = []
 
     for cat_key, display_name in collection_names.items():
         app_ids = [g["appid"] for g in categories.get(cat_key, []) if g.get("appid")]
@@ -335,6 +338,7 @@ def write_collections_to_steam(
                     entry[1]["value"] = new_value
                     entry[1]["timestamp"] = timestamp
                     entry[1]["version"] = str(version)
+                    modified_keys.append(coll["key"])
                     break
         else:
             # Create new collection
@@ -359,11 +363,36 @@ def write_collections_to_steam(
                     },
                 ]
             )
+            modified_keys.append(coll_key)
 
         version += 1
 
-    # Write back
+    # Write the collection data
     cloud_path.write_text(json.dumps(cloud_data), encoding="utf-8")
+
+    # Tell Steam these keys were modified locally so it syncs them to the cloud
+    modified_path = cloud_path.with_name("cloud-storage-namespace-1.modified.json")
+    existing_modified = []
+    if modified_path.exists():
+        try:
+            existing_modified = json.loads(modified_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            existing_modified = []
+    all_modified = list(set(existing_modified + modified_keys))
+    modified_path.write_text(json.dumps(all_modified), encoding="utf-8")
+
+    # Update the namespace version so Steam knows local state is newer
+    namespaces_path = cloud_path.with_name("cloud-storage-namespaces.json")
+    if namespaces_path.exists():
+        try:
+            namespaces = json.loads(namespaces_path.read_text(encoding="utf-8"))
+            for ns in namespaces:
+                if ns[0] == 1:
+                    ns[1] = str(version)
+                    break
+            namespaces_path.write_text(json.dumps(namespaces), encoding="utf-8")
+        except (json.JSONDecodeError, ValueError, IndexError):
+            pass
 
 
 # ── Caching ────────────────────────────────────────────────────────────────────
@@ -427,10 +456,119 @@ def clear_classification_progress():
         PROGRESS_CACHE.unlink()
 
 
+# ── Saved classifications & manual overrides ──────────────────────────────────
+
+
+def load_saved_classifications() -> dict:
+    """Load previously saved final classifications. Returns {appid: game_dict}."""
+    if not CLASSIFICATIONS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(CLASSIFICATIONS_FILE.read_text(encoding="utf-8"))
+        return {g["appid"]: g for g in data if g.get("appid")}
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def save_final_classifications(all_classified: list):
+    """Save final classifications so future runs reuse them."""
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    CLASSIFICATIONS_FILE.write_text(
+        json.dumps(all_classified, indent=2), encoding="utf-8"
+    )
+
+
+def load_overrides() -> dict:
+    """Load manual overrides. Returns {appid: category_string}."""
+    if not OVERRIDES_FILE.exists():
+        return {}
+    try:
+        return json.loads(OVERRIDES_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, KeyError):
+        return {}
+
+
+def save_overrides(overrides: dict):
+    """Save manual overrides to config."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    OVERRIDES_FILE.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+
+
+def run_override_menu(games_data: list, saved: dict):
+    """Interactive menu to manually override game categories."""
+    overrides = load_overrides()
+    name_lookup = {g["appid"]: g.get("name", f"App {g['appid']}") for g in games_data}
+    category_labels = {"1": "COMPLETED", "2": "IN_PROGRESS", "3": "ENDLESS", "4": "NOT_A_GAME"}
+
+    while True:
+        console.print(
+            "\n[bold]Manual Override[/bold]\n"
+            "  Type a game name to search, or 'done' to finish."
+        )
+        if overrides:
+            console.print(f"  [dim]({len(overrides)} override(s) currently set)[/dim]")
+
+        query = Prompt.ask("\n  Search").strip()
+        if query.lower() == "done":
+            break
+
+        # Search for matching games
+        matches = [
+            g for g in games_data
+            if query.lower() in g.get("name", "").lower()
+        ]
+        if not matches:
+            console.print(f"  [red]No games found matching '{query}'.[/red]")
+            continue
+
+        # Show matches
+        for i, g in enumerate(matches[:15]):
+            appid = g["appid"]
+            current = overrides.get(str(appid)) or saved.get(appid, {}).get("category", "?")
+            console.print(f"  {i + 1}. {g.get('name', '?')} [dim](currently: {current})[/dim]")
+
+        if len(matches) > 15:
+            console.print(f"  [dim]...and {len(matches) - 15} more. Try a more specific search.[/dim]")
+
+        choice = Prompt.ask("  Select game #, or 'back'").strip()
+        if choice.lower() == "back":
+            continue
+        try:
+            idx = int(choice) - 1
+            if idx < 0 or idx >= min(len(matches), 15):
+                raise ValueError
+        except ValueError:
+            console.print("  [red]Invalid selection.[/red]")
+            continue
+
+        game = matches[idx]
+        console.print(
+            f"\n  [bold]{game.get('name')}[/bold]\n"
+            "  Set category:\n"
+            "    1. COMPLETED\n"
+            "    2. IN_PROGRESS\n"
+            "    3. ENDLESS\n"
+            "    4. NOT_A_GAME\n"
+            "    5. Remove override"
+        )
+        cat_choice = Prompt.ask("  Choice", choices=["1", "2", "3", "4", "5"])
+        if cat_choice == "5":
+            overrides.pop(str(game["appid"]), None)
+            console.print(f"  [yellow]Override removed for {game.get('name')}.[/yellow]")
+        else:
+            overrides[str(game["appid"])] = category_labels[cat_choice]
+            console.print(
+                f"  [green]{game.get('name')} → {category_labels[cat_choice]}[/green]"
+            )
+
+    save_overrides(overrides)
+    return overrides
+
+
 # ── AI Classification ──────────────────────────────────────────────────────────
 
 CLASSIFICATION_PROMPT = """\
-You are a gaming expert. Classify each Steam game into one of three categories:
+You are a gaming expert. Classify each Steam game into one of four categories:
 
 1. **COMPLETED** - The user has finished the main storyline or primary content.
    "Completed" means beating the main story/campaign — NOT 100% achievements.
@@ -442,7 +580,11 @@ You are a gaming expert. Classify each Steam game into one of three categories:
 
 3. **ENDLESS** - The game has no real "completion" state. Examples: multiplayer-only
    games, competitive games, sandbox games, simulation games, strategy games like
-   Age of Empires or Civilization, endless roguelikes, tools/utilities, VR experiences.
+   Age of Empires or Civilization, endless roguelikes.
+
+4. **NOT_A_GAME** - Not a real game. Examples: demos, teasers, playable teasers,
+   tech demos, tools, utilities, software (Wallpaper Engine, RPG Maker), VR home
+   apps, soundtracks, video players, benchmarks, dedicated servers, modding tools.
 
 For each game, respond with ONLY a JSON object (no markdown, no explanation):
 {
@@ -475,6 +617,8 @@ Other edge cases:
 - Roguelikes with story elements (Hades) → completable
 - Multiplayer-focused games with short campaigns (COD) → use playtime to judge
 - Free-to-play games the user may have tried briefly → still classify normally
+- Demos, teasers, playable teasers → NOT_A_GAME (even if they have achievements)
+- Tools/utilities/software that happen to be on Steam → NOT_A_GAME
 """
 
 
@@ -591,10 +735,12 @@ def get_config() -> dict:
 
 
 def main():
-    # Handle --setup flag
+    # Handle flags
     if "--setup" in sys.argv:
         run_setup(force=True)
         return
+    force_reclassify = "--reclassify" in sys.argv
+    do_override = "--override" in sys.argv
 
     console.print(
         Panel(
@@ -758,71 +904,142 @@ def main():
         if game["appid"] in user_collection_hints:
             game["user_collection"] = user_collection_hints[game["appid"]]
 
-    # ── Step 2: Classify with AI (with resume support) ────────────────────
-    console.print(f"\n[bold]Classifying {len(games_data)} games with AI...[/bold]\n")
-    client = anthropic.Anthropic(api_key=config["anthropic_api_key"])
-
-    BATCH_SIZE = 25
-    all_classified = []
-    start_batch = 0
-
-    # Check for interrupted progress
-    saved_progress = load_classification_progress(config["steam_id"])
-    if saved_progress:
-        saved_classified, saved_batch = saved_progress
-        console.print(
-            f"[dim]Found interrupted classification progress: "
-            f"{len(saved_classified)} games classified, stopped at batch {saved_batch + 1}.[/dim]"
-        )
-        if Confirm.ask("Resume from where it left off?", default=True):
-            all_classified = saved_classified
-            start_batch = saved_batch + 1
-
-    batches = [
-        games_data[i : i + BATCH_SIZE]
-        for i in range(0, len(games_data), BATCH_SIZE)
-    ]
-
-    if start_batch >= len(batches):
-        console.print(
-            "[green]Classification already complete from previous run![/green]"
-        )
+    # ── Step 2: Handle manual overrides (if --override flag) ─────────────
+    if do_override:
+        saved = load_saved_classifications()
+        overrides = run_override_menu(games_data, saved)
+        # Apply overrides to saved classifications and rebuild categories
+        for appid_str, category in overrides.items():
+            appid = int(appid_str)
+            if appid in saved:
+                saved[appid]["category"] = category
+            else:
+                # Find game name from games_data
+                name = next(
+                    (g["name"] for g in games_data if g["appid"] == appid),
+                    f"App {appid}",
+                )
+                saved[appid] = {
+                    "appid": appid,
+                    "name": name,
+                    "category": category,
+                    "confidence": "HIGH",
+                    "reason": "Manual override",
+                }
+        all_classified = list(saved.values())
+        save_final_classifications(all_classified)
     else:
-        remaining = len(batches) - start_batch
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
-                f"Classifying batch {start_batch + 1}/{len(batches)}...",
-                total=remaining,
+        # ── Step 2: Classify with AI (reuse saved, only classify new) ──────
+        saved = load_saved_classifications()
+        overrides = load_overrides()
+        all_known_appids = set(saved.keys())
+        new_games = [g for g in games_data if g["appid"] not in all_known_appids]
+
+        if saved and not force_reclassify:
+            console.print(
+                f"[dim]Found {len(saved)} previously classified games.[/dim]"
             )
-
-            for i in range(start_batch, len(batches)):
-                progress.update(
-                    task,
-                    description=f"Classifying batch {i+1}/{len(batches)}...",
-                    completed=i - start_batch,
+            if new_games:
+                console.print(
+                    f"[bold]{len(new_games)} new game(s) to classify.[/bold]"
                 )
-                classified = classify_games_batch(client, batches[i])
-                all_classified.extend(classified)
-
-                # Save progress after each batch
-                save_classification_progress(
-                    config["steam_id"], all_classified, i
+            else:
+                console.print(
+                    "[green]All games already classified from previous run.[/green]"
                 )
 
-                if i < len(batches) - 1:
-                    time.sleep(1)  # rate limit courtesy between batches
+        if force_reclassify:
+            games_to_classify = games_data
+            console.print(
+                f"\n[bold]Reclassifying all {len(games_to_classify)} games with AI...[/bold]\n"
+            )
+        else:
+            games_to_classify = new_games
 
-            progress.update(task, completed=remaining)
+        if games_to_classify:
+            if not force_reclassify and not new_games:
+                pass  # Nothing to classify
+            else:
+                console.print(
+                    f"\n[bold]Classifying {len(games_to_classify)} games with AI...[/bold]\n"
+                )
+                client = anthropic.Anthropic(api_key=config["anthropic_api_key"])
 
-    # Classification complete — clean up progress file
-    clear_classification_progress()
+                BATCH_SIZE = 25
+                newly_classified = []
+                start_batch = 0
+
+                # Check for interrupted progress
+                saved_progress = load_classification_progress(config["steam_id"])
+                if saved_progress:
+                    saved_classified, saved_batch = saved_progress
+                    console.print(
+                        f"[dim]Found interrupted classification progress: "
+                        f"{len(saved_classified)} games classified, stopped at batch {saved_batch + 1}.[/dim]"
+                    )
+                    if Confirm.ask("Resume from where it left off?", default=True):
+                        newly_classified = saved_classified
+                        start_batch = saved_batch + 1
+
+                batches = [
+                    games_to_classify[i : i + BATCH_SIZE]
+                    for i in range(0, len(games_to_classify), BATCH_SIZE)
+                ]
+
+                if start_batch >= len(batches):
+                    console.print(
+                        "[green]Classification already complete from previous run![/green]"
+                    )
+                else:
+                    remaining = len(batches) - start_batch
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[progress.description]{task.description}"),
+                        console=console,
+                    ) as progress:
+                        task = progress.add_task(
+                            f"Classifying batch {start_batch + 1}/{len(batches)}...",
+                            total=remaining,
+                        )
+
+                        for i in range(start_batch, len(batches)):
+                            progress.update(
+                                task,
+                                description=f"Classifying batch {i+1}/{len(batches)}...",
+                                completed=i - start_batch,
+                            )
+                            classified = classify_games_batch(client, batches[i])
+                            newly_classified.extend(classified)
+
+                            save_classification_progress(
+                                config["steam_id"], newly_classified, i
+                            )
+
+                            if i < len(batches) - 1:
+                                time.sleep(1)
+
+                        progress.update(task, completed=remaining)
+
+                clear_classification_progress()
+
+                # Merge new classifications into saved
+                for g in newly_classified:
+                    if g.get("appid"):
+                        saved[g["appid"]] = g
+
+        # Apply manual overrides on top
+        for appid_str, category in overrides.items():
+            appid = int(appid_str)
+            if appid in saved:
+                saved[appid]["category"] = category
+                saved[appid]["reason"] = "Manual override"
+                saved[appid]["confidence"] = "HIGH"
+
+        all_classified = list(saved.values())
+        save_final_classifications(all_classified)
 
     # ── Step 3: Display results ───────────────────────────────────────────
-    categories = {"COMPLETED": [], "IN_PROGRESS": [], "ENDLESS": []}
+    categories = {"COMPLETED": [], "IN_PROGRESS": [], "ENDLESS": [], "NOT_A_GAME": []}
     for game in all_classified:
         cat = game.get("category", "ENDLESS")
         categories.setdefault(cat, []).append(game)
@@ -840,6 +1057,7 @@ def main():
         "COMPLETED": ("green", "Completed"),
         "IN_PROGRESS": ("yellow", "In Progress / Backlog"),
         "ENDLESS": ("cyan", "Endless / No Completion"),
+        "NOT_A_GAME": ("dim", "Not a Game"),
     }
 
     for cat_key, (color, label) in category_styles.items():
@@ -879,6 +1097,7 @@ def main():
             f"[green]Completed:[/green] {len(categories.get('COMPLETED', []))} games\n"
             f"[yellow]In Progress / Backlog:[/yellow] {len(categories.get('IN_PROGRESS', []))} games\n"
             f"[cyan]Endless:[/cyan] {len(categories.get('ENDLESS', []))} games\n"
+            f"[dim]Not a Game:[/dim] {len(categories.get('NOT_A_GAME', []))} items\n"
             f"[dim]Total classified: {len(all_classified)} / {len(games_data)} games[/dim]",
             title="Summary",
             border_style="blue",
@@ -894,6 +1113,7 @@ def main():
             "    [green]AI: Completed[/green]\n"
             "    [yellow]AI: In Progress[/yellow]\n"
             "    [cyan]AI: Endless[/cyan]\n"
+            "    [dim]AI: Not a Game[/dim]\n"
             "\n"
             "  [dim]Your existing collections will NOT be touched — only 'AI:' prefixed ones are managed.\n"
             "  If these collections already exist from a previous run, they will be updated.\n"
@@ -911,6 +1131,7 @@ def main():
                     "COMPLETED": "AI: Completed",
                     "IN_PROGRESS": "AI: In Progress",
                     "ENDLESS": "AI: Endless",
+                    "NOT_A_GAME": "AI: Not a Game",
                 }
                 write_collections_to_steam(
                     cloud_data, cloud_path, categories, collection_names

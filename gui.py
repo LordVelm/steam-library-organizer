@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Steam Library Organizer — GUI
+Steam Backlog Organizer — GUI
 CustomTkinter interface with Simple and Detailed view modes.
 """
 
@@ -45,29 +45,38 @@ TOOLTIP_ANTHROPIC = (
 
 
 class Tooltip:
-    """Hover tooltip for any widget."""
+    """Hover tooltip that stays visible so users can select/copy text from it."""
 
     def __init__(self, widget, text: str, delay: int = 400):
         self.widget = widget
         self.text = text
         self.delay = delay
         self._after_id = None
+        self._hide_after_id = None
         self._tooltip_window = None
+        self._in_tooltip = False
         widget.bind("<Enter>", self._schedule)
-        widget.bind("<Leave>", self._cancel)
-        widget.bind("<ButtonPress>", self._cancel)
+        widget.bind("<Leave>", self._schedule_hide)
 
     def _schedule(self, event=None):
-        self._cancel()
-        self._after_id = self.widget.after(self.delay, self._show)
+        self._cancel_hide()
+        if not self._tooltip_window:
+            if self._after_id:
+                self.widget.after_cancel(self._after_id)
+            self._after_id = self.widget.after(self.delay, self._show)
 
-    def _cancel(self, event=None):
-        if self._after_id:
-            self.widget.after_cancel(self._after_id)
-            self._after_id = None
-        self._hide()
+    def _schedule_hide(self, event=None):
+        """Hide after a short delay, giving time to move mouse into tooltip."""
+        self._cancel_hide()
+        self._hide_after_id = self.widget.after(300, self._hide)
+
+    def _cancel_hide(self):
+        if self._hide_after_id:
+            self.widget.after_cancel(self._hide_after_id)
+            self._hide_after_id = None
 
     def _show(self):
+        self._after_id = None
         if self._tooltip_window:
             return
         x = self.widget.winfo_rootx() + 20
@@ -79,15 +88,42 @@ class Tooltip:
         tw.attributes("-topmost", True)
 
         frame = tk.Frame(tw, background="#333333", borderwidth=1, relief="solid")
-        frame.pack()
-        label = tk.Label(
-            frame, text=self.text, justify="left",
+        frame.pack(fill="both", expand=True)
+
+        # Use a Text widget so content is selectable/copyable
+        textbox = tk.Text(
+            frame, wrap="word", relief="flat", borderwidth=0,
             background="#333333", foreground="#e0e0e0",
             font=("Segoe UI", 9), padx=8, pady=6,
+            cursor="arrow", selectbackground="#555555",
+            highlightthickness=0,
         )
-        label.pack()
+        textbox.insert("1.0", self.text)
+        textbox.configure(state="normal")  # keep selectable
+
+        # Size the text widget to fit content
+        lines = self.text.split("\n")
+        width = min(max(len(line) for line in lines) + 2, 60)
+        height = len(lines)
+        textbox.configure(width=width, height=height)
+        textbox.pack()
+
+        # Keep tooltip open while mouse is over it
+        tw.bind("<Enter>", self._on_tooltip_enter)
+        tw.bind("<Leave>", self._on_tooltip_leave)
+        frame.bind("<Enter>", self._on_tooltip_enter)
+        frame.bind("<Leave>", self._on_tooltip_leave)
+        textbox.bind("<Enter>", self._on_tooltip_enter)
+        textbox.bind("<Leave>", self._on_tooltip_leave)
+
+    def _on_tooltip_enter(self, event=None):
+        self._cancel_hide()
+
+    def _on_tooltip_leave(self, event=None):
+        self._schedule_hide()
 
     def _hide(self):
+        self._hide_after_id = None
         if self._tooltip_window:
             self._tooltip_window.destroy()
             self._tooltip_window = None
@@ -112,7 +148,7 @@ COLLECTION_NAMES = {
 class SteamOrganizerApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Steam Library Organizer")
+        self.title("Steam Backlog Organizer")
         self.geometry("1000x720")
         self.minsize(800, 600)
 
@@ -133,7 +169,7 @@ class SteamOrganizerApp(ctk.CTk):
         self.top_bar = ctk.CTkFrame(self, height=36, fg_color="transparent")
         self.top_bar.pack(fill="x", padx=10, pady=(8, 0))
 
-        ctk.CTkLabel(self.top_bar, text="Steam Library Organizer",
+        ctk.CTkLabel(self.top_bar, text="Steam Backlog Organizer",
                      font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
 
         # View toggle

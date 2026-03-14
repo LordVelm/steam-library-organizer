@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Steam Library Organizer — a Python CLI tool that categorizes a user's Steam game library into four collections (Completed, In Progress/Backlog, Endless, Not a Game) using a hybrid approach: rule-based classification for obvious cases, optional AI (Claude) for ambiguous ones. Writes collections directly to Steam's local cloud storage with proper sync metadata so they appear on all machines.
+Steam Backlog Organizer — a Python CLI tool that categorizes a user's Steam game library into four collections (Completed, In Progress/Backlog, Endless, Not a Game) using a hybrid approach: rule-based classification for obvious cases, optional AI (Claude) for ambiguous ones. Writes collections directly to Steam's local cloud storage with proper sync metadata so they appear on all machines.
 
 ## Commands
 

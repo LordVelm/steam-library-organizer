@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build script to package Steam Library Organizer as a standalone .exe"""
+"""Build script to package Steam Backlog Organizer as a standalone .exe"""
 
 import sys
 import PyInstaller.__main__
@@ -10,7 +10,7 @@ if "--cli" in sys.argv:
         [
             "organizer.py",
             "--onefile",
-            "--name=SteamLibraryOrganizer-CLI",
+            "--name=SteamBacklogOrganizer-CLI",
             "--console",
             "--clean",
             "--hidden-import=anthropic",
@@ -23,7 +23,7 @@ else:
         [
             "gui.py",
             "--onefile",
-            "--name=SteamLibraryOrganizer",
+            "--name=SteamBacklogOrganizer",
             "--windowed",
             "--clean",
             "--hidden-import=anthropic",

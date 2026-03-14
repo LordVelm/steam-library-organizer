@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Steam Library Organizer
+Steam Backlog Organizer
 Categorizes your Steam library using a hybrid approach:
   - Rule-based classification (free) handles most games
   - Optional AI classification (requires Anthropic API key) for ambiguous ones
@@ -1056,7 +1056,7 @@ def get_config() -> dict:
     if not api_key or (not steam_id and not steam_id_input):
         console.print(
             Panel(
-                "[bold]Steam Library Organizer[/bold]\n"
+                "[bold]Steam Backlog Organizer[/bold]\n"
                 "Categorize your Steam games into:\n"
                 "  Completed | In Progress / Backlog | Endless\n\n"
                 "Uses rule-based classification (free) with optional AI assist.\n"
@@ -1236,7 +1236,7 @@ def save_json_export(config: dict, games_data: list, categories: dict):
         documents = Path.home() / "Documents"
         if not documents.exists():
             documents = Path.home()
-        output_path = documents / "steam_library_organized.json"
+        output_path = documents / "steam_backlog_organized.json"
         with open(output_path, "w") as f:
             json.dump(output, f, indent=2)
         console.print(f"[green]Saved to {output_path}[/green]")
@@ -1435,7 +1435,7 @@ def main():
     # Welcome banner
     console.print(
         Panel(
-            "[bold]Steam Library Organizer[/bold]\n"
+            "[bold]Steam Backlog Organizer[/bold]\n"
             "Categorize your Steam games into:\n"
             "  Completed | In Progress / Backlog | Endless\n\n"
             "[dim]Hybrid: rules (free) + optional AI for ambiguous games[/dim]",

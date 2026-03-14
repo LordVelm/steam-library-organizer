@@ -1,4 +1,4 @@
-# Steam Library Organizer
+# Steam Backlog Organizer
 
 Automatically categorizes your Steam game library into four collections:
 

@@ -107,3 +107,8 @@ python build.py --cli    # CLI exe → dist/SteamBacklogOrganizer-CLI.exe
 - **Expanded rules from 9 to 14** — Covers all cases including moderate achievement + playtime heuristics, significant SP playtime detection, and genre-based fallbacks
 - **GUI** — CustomTkinter app with Simple and Detailed view modes
 - **Error handling** — Timeouts on all API calls, clear error messages for network/auth/permission failures, graceful handling of corrupt cache files
+
+## Feedback & Support
+
+- **Bug reports & feature requests** — [Open an issue](https://github.com/LordVelm/steam-backlog-organizer/issues)
+- **Support the project** — [Buy Me a Coffee](https://buymeacoffee.com/lordvelm)

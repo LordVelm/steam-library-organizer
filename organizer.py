@@ -292,38 +292,55 @@ def fetch_store_details(app_id: int) -> dict | None:
 
 
 def fetch_store_details_batch(
-    app_ids: list[int], store_cache: dict
+    app_ids: list[int], store_cache: dict, progress_callback=None
 ) -> dict:
-    """Fetch store details for multiple apps, using cache where available."""
+    """Fetch store details for multiple apps, using cache where available.
+
+    progress_callback(event, data): optional callback for GUI progress updates.
+      Events: "store_progress" with {current, total, name}
+    """
     uncached = [aid for aid in app_ids if str(aid) not in store_cache]
 
     if uncached:
-        console.print(
-            f"[dim]Fetching store details for {len(uncached)} games "
-            f"({len(app_ids) - len(uncached)} cached)...[/dim]"
-        )
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
+        if progress_callback:
+            progress_callback("store_progress", {"current": 0, "total": len(uncached), "name": ""})
+        else:
+            console.print(
+                f"[dim]Fetching store details for {len(uncached)} games "
+                f"({len(app_ids) - len(uncached)} cached)...[/dim]"
+            )
+
+        if not progress_callback:
+            progress_ctx = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            )
+            progress_obj = progress_ctx.__enter__()
+            task = progress_obj.add_task(
                 "Fetching store details...", total=len(uncached)
             )
-            for i, app_id in enumerate(uncached):
-                progress.update(
+
+        for i, app_id in enumerate(uncached):
+            if progress_callback:
+                progress_callback("store_progress", {"current": i + 1, "total": len(uncached), "name": str(app_id)})
+            elif progress_obj:
+                progress_obj.update(
                     task,
                     description=f"Store details ({i + 1}/{len(uncached)})",
                     completed=i,
                 )
-                details = fetch_store_details(app_id)
-                if details:
-                    store_cache[str(app_id)] = details
-                else:
-                    # Cache a miss so we don't retry
-                    store_cache[str(app_id)] = {"type": "", "genres": [], "categories": []}
-                time.sleep(0.3)  # rate limit for store API
-            progress.update(task, completed=len(uncached))
+            details = fetch_store_details(app_id)
+            if details:
+                store_cache[str(app_id)] = details
+            else:
+                # Cache a miss so we don't retry
+                store_cache[str(app_id)] = {"type": "", "genres": [], "categories": []}
+            time.sleep(0.3)  # rate limit for store API
+
+        if not progress_callback:
+            progress_obj.update(task, completed=len(uncached))
+            progress_ctx.__exit__(None, None, None)
 
         save_store_cache(store_cache)
 
@@ -360,8 +377,11 @@ def wait_for_steam_closed():
     return True
 
 
-def find_steam_userdata() -> Path | None:
-    """Find the Steam userdata directory. Returns the first user's path."""
+def find_steam_userdata(account_index: int | None = None) -> Path | None:
+    """Find the Steam userdata directory.
+
+    account_index: if provided, pick that account (0-indexed) without prompting.
+    """
     userdata = STEAM_BASE / "userdata"
     if not userdata.exists():
         return None
@@ -369,6 +389,10 @@ def find_steam_userdata() -> Path | None:
     if len(users) == 1:
         return users[0]
     if len(users) > 1:
+        if account_index is not None:
+            if 0 <= account_index < len(users):
+                return users[account_index]
+            return users[0]
         console.print("[bold]Multiple Steam accounts found:[/bold]")
         for i, u in enumerate(users):
             console.print(f"  {i + 1}. {u.name}")
@@ -377,6 +401,14 @@ def find_steam_userdata() -> Path | None:
         )
         return users[int(choice) - 1]
     return None
+
+
+def get_steam_accounts() -> list[Path]:
+    """Return list of Steam userdata account directories."""
+    userdata = STEAM_BASE / "userdata"
+    if not userdata.exists():
+        return []
+    return [d for d in userdata.iterdir() if d.is_dir()]
 
 
 def load_steam_collections(userdata_path: Path) -> tuple[list, Path]:
@@ -743,6 +775,7 @@ def classify_all_games(
     overrides: dict,
     store_cache: dict,
     anthropic_key: str | None,
+    progress_callback=None,
 ) -> list[dict]:
     """
     Classify all games using the hybrid approach:
@@ -774,6 +807,21 @@ def classify_all_games(
             override_count += 1
             continue
 
+        # Layer 1.5: NOT_A_GAME name patterns override saved classifications
+        # (a "dedicated server" or "soundtrack" is never a real game, even if
+        # a previous AI run classified it as something else)
+        game_name = game.get("name", "")
+        if NOT_A_GAME_NAME_PATTERNS.search(game_name):
+            results[appid] = {
+                "appid": appid,
+                "name": game_name or f"App {appid}",
+                "category": "NOT_A_GAME",
+                "confidence": "HIGH",
+                "reason": "Rule: name matches not-a-game pattern",
+            }
+            rule_count += 1
+            continue
+
         # Layer 2: Reuse saved classifications
         if appid in saved:
             results[appid] = saved[appid]
@@ -798,18 +846,25 @@ def classify_all_games(
         # Not classified yet — collect for AI or fallback
         unclassified.append(game)
 
-    console.print(
-        f"[dim]Classification: {override_count} overrides, "
+    status_msg = (
+        f"Classification: {override_count} overrides, "
         f"{saved_count} saved, {rule_count} rule-based, "
-        f"{len(unclassified)} remaining[/dim]"
+        f"{len(unclassified)} remaining"
     )
+    if progress_callback:
+        progress_callback("classify_status", {"message": status_msg})
+    else:
+        console.print(f"[dim]{status_msg}[/dim]")
 
     # Layer 4: AI classification for ambiguous games
     if unclassified and anthropic_key and HAS_ANTHROPIC:
-        console.print(
-            f"\n[bold]Classifying {len(unclassified)} ambiguous games with AI...[/bold]"
-        )
-        ai_results = classify_with_ai(anthropic_key, unclassified)
+        if progress_callback:
+            progress_callback("classify_status", {"message": f"Classifying {len(unclassified)} ambiguous games with AI..."})
+        else:
+            console.print(
+                f"\n[bold]Classifying {len(unclassified)} ambiguous games with AI...[/bold]"
+            )
+        ai_results = classify_with_ai(anthropic_key, unclassified, progress_callback=progress_callback)
         for g in ai_results:
             if g.get("appid"):
                 results[g["appid"]] = g
@@ -818,16 +873,20 @@ def classify_all_games(
         ai_classified_ids = {g["appid"] for g in ai_results if g.get("appid")}
         still_unclassified = [g for g in unclassified if g["appid"] not in ai_classified_ids]
     elif unclassified and not anthropic_key:
-        console.print(
-            f"[dim]{len(unclassified)} games could not be classified by rules. "
-            f"Add an Anthropic API key (--setup) for AI classification.[/dim]"
-        )
+        msg = (f"{len(unclassified)} games could not be classified by rules. "
+               f"Add an Anthropic API key for AI classification.")
+        if progress_callback:
+            progress_callback("classify_status", {"message": msg})
+        else:
+            console.print(f"[dim]{msg}[/dim]")
         still_unclassified = unclassified
     elif unclassified and not HAS_ANTHROPIC:
-        console.print(
-            f"[dim]{len(unclassified)} games could not be classified by rules. "
-            f"Install anthropic (pip install anthropic) for AI classification.[/dim]"
-        )
+        msg = (f"{len(unclassified)} games could not be classified by rules. "
+               f"Install anthropic (pip install anthropic) for AI classification.")
+        if progress_callback:
+            progress_callback("classify_status", {"message": msg})
+        else:
+            console.print(f"[dim]{msg}[/dim]")
         still_unclassified = unclassified
     else:
         still_unclassified = []
@@ -936,7 +995,7 @@ def classify_games_batch(
         return []
 
 
-def classify_with_ai(anthropic_key: str, games: list[dict]) -> list[dict]:
+def classify_with_ai(anthropic_key: str, games: list[dict], progress_callback=None) -> list[dict]:
     """Classify a list of games using the Anthropic API."""
     client = anthropic.Anthropic(api_key=anthropic_key)
     BATCH_SIZE = 25
@@ -944,25 +1003,33 @@ def classify_with_ai(anthropic_key: str, games: list[dict]) -> list[dict]:
 
     batches = [games[i : i + BATCH_SIZE] for i in range(0, len(games), BATCH_SIZE)]
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task(
-            f"AI batch 1/{len(batches)}...", total=len(batches)
-        )
+    if progress_callback:
         for i, batch in enumerate(batches):
-            progress.update(
-                task,
-                description=f"AI batch {i + 1}/{len(batches)}...",
-                completed=i,
-            )
+            progress_callback("ai_progress", {"batch": i + 1, "total": len(batches)})
             classified = classify_games_batch(client, batch)
             all_classified.extend(classified)
             if i < len(batches) - 1:
                 time.sleep(1)
-        progress.update(task, completed=len(batches))
+    else:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task(
+                f"AI batch 1/{len(batches)}...", total=len(batches)
+            )
+            for i, batch in enumerate(batches):
+                progress.update(
+                    task,
+                    description=f"AI batch {i + 1}/{len(batches)}...",
+                    completed=i,
+                )
+                classified = classify_games_batch(client, batch)
+                all_classified.extend(classified)
+                if i < len(batches) - 1:
+                    time.sleep(1)
+            progress.update(task, completed=len(batches))
 
     return all_classified
 
@@ -1051,6 +1118,39 @@ def get_config() -> dict:
     return {
         "steam_api_key": api_key.strip(),
         "anthropic_api_key": anthropic_key.strip() if anthropic_key else None,
+        "steam_id": steam_id.strip(),
+    }
+
+
+def get_config_from_values(steam_api_key: str, steam_id_input: str, anthropic_api_key: str = "") -> dict:
+    """Build a config dict from explicit values (for GUI use). Raises ValueError on errors."""
+    if not steam_api_key:
+        raise ValueError("Steam API key is required.")
+    if not steam_id_input:
+        raise ValueError("Steam ID is required.")
+
+    steam_id = None
+    if steam_id_input.isdigit():
+        steam_id = steam_id_input
+    else:
+        resolved = resolve_vanity_url(steam_api_key, steam_id_input)
+        if resolved:
+            steam_id = resolved
+        else:
+            raise ValueError(f"Could not resolve '{steam_id_input}' to a Steam ID.")
+
+    # Save for future use
+    saved = load_saved_config()
+    saved["steam_api_key"] = steam_api_key
+    saved["steam_id_input"] = steam_id_input
+    saved["steam_id"] = steam_id
+    if anthropic_api_key:
+        saved["anthropic_api_key"] = anthropic_api_key
+    save_config(saved)
+
+    return {
+        "steam_api_key": steam_api_key.strip(),
+        "anthropic_api_key": anthropic_api_key.strip() if anthropic_api_key else None,
         "steam_id": steam_id.strip(),
     }
 
@@ -1183,85 +1283,122 @@ def write_steam_collections(cloud_data: list, cloud_path: Path, categories: dict
 # ── Fetch library data ──────────────────────────────────────────────────────
 
 
-def fetch_library_data(config: dict) -> list[dict]:
-    """Fetch library data from cache or Steam API, including achievements."""
+def fetch_library_data(config: dict, use_cache: bool | None = None, progress_callback=None) -> list[dict]:
+    """Fetch library data from cache or Steam API, including achievements.
+
+    use_cache: True=use cache, False=force refresh, None=prompt user (CLI mode).
+    progress_callback(event, data): optional GUI progress updates.
+      Events: "library_status", "library_progress", "achievement_progress"
+    """
     games_data = None
     cache_result = load_library_cache(config["steam_id"])
 
     if cache_result:
         cached_games, age_hours = cache_result
-        console.print(
-            f"[dim]Found cached library data ({len(cached_games)} games, "
-            f"{age_hours:.1f} hours old).[/dim]"
-        )
-        if age_hours < 24:
-            use_cache = Confirm.ask("Use cached library data?", default=True)
-        else:
-            use_cache = Confirm.ask(
-                f"Cache is {age_hours:.0f} hours old. Use it anyway?", default=False
-            )
-        if use_cache:
+        if use_cache is True:
             games_data = cached_games
+            if progress_callback:
+                progress_callback("library_status", {"message": f"Using cached data ({len(cached_games)} games, {age_hours:.1f}h old)"})
+        elif use_cache is False:
+            pass  # skip cache, fetch fresh
+        else:
+            # CLI mode — prompt
+            console.print(
+                f"[dim]Found cached library data ({len(cached_games)} games, "
+                f"{age_hours:.1f} hours old).[/dim]"
+            )
+            if age_hours < 24:
+                should_use = Confirm.ask("Use cached library data?", default=True)
+            else:
+                should_use = Confirm.ask(
+                    f"Cache is {age_hours:.0f} hours old. Use it anyway?", default=False
+                )
+            if should_use:
+                games_data = cached_games
 
     if games_data is None:
         # Fetch fresh from Steam
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Fetching your Steam library...", total=None)
+        if progress_callback:
+            progress_callback("library_status", {"message": "Fetching your Steam library..."})
+        else:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Fetching your Steam library...", total=None)
+                games = get_owned_games(config["steam_api_key"], config["steam_id"])
+                progress.update(task, description=f"Found {len(games)} games!")
+
+        if progress_callback:
             games = get_owned_games(config["steam_api_key"], config["steam_id"])
-            progress.update(task, description=f"Found {len(games)} games!")
+            progress_callback("library_status", {"message": f"Found {len(games)} games"})
 
         if not games:
-            console.print(
-                "[red]No games found. Check that your Steam profile/game details are set to public.[/red]\n"
-                "  Go to: Steam > Profile > Edit Profile > Privacy Settings\n"
-                "  Set 'Game details' to Public."
-            )
-            sys.exit(1)
+            msg = ("No games found. Check that your Steam profile/game details are set to public. "
+                   "Go to: Steam > Profile > Edit Profile > Privacy Settings > Set 'Game details' to Public.")
+            if progress_callback:
+                progress_callback("error", {"message": msg})
+                return []
+            else:
+                console.print(f"[red]{msg}[/red]")
+                sys.exit(1)
 
         played_games = [g for g in games if g.get("playtime_forever", 0) > 0]
-        console.print(
-            f"\n[bold]Found {len(games)} games in your library "
-            f"({len(played_games)} played).[/bold]\n"
-        )
-
-        # Fetch achievements for played games
-        console.print(
-            f"[dim]Fetching achievement data for {len(played_games)} played games "
-            f"(skipping {len(games) - len(played_games)} unplayed)...[/dim]\n"
-        )
+        if progress_callback:
+            progress_callback("library_status", {"message": f"Fetching achievements for {len(played_games)} played games..."})
+        else:
+            console.print(
+                f"\n[bold]Found {len(games)} games in your library "
+                f"({len(played_games)} played).[/bold]\n"
+            )
+            console.print(
+                f"[dim]Fetching achievement data for {len(played_games)} played games "
+                f"(skipping {len(games) - len(played_games)} unplayed)...[/dim]\n"
+            )
 
         achievement_cache = {}
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
-                "Fetching achievements...", total=len(played_games)
-            )
+        if progress_callback:
             for i, game in enumerate(played_games):
-                progress.update(
-                    task,
-                    description=f"Fetching achievements ({i+1}/{len(played_games)}): {game.get('name', 'Unknown')}",
-                    completed=i,
-                )
+                progress_callback("achievement_progress", {
+                    "current": i + 1, "total": len(played_games),
+                    "name": game.get("name", "Unknown"),
+                })
                 achievements = get_player_achievements(
-                    config["steam_api_key"],
-                    config["steam_id"],
-                    game["appid"],
+                    config["steam_api_key"], config["steam_id"], game["appid"],
                 )
                 if achievements:
                     achievement_cache[game["appid"]] = achievements
-                time.sleep(0.5)  # rate limit
-            progress.update(task, completed=len(played_games))
+                time.sleep(0.5)
+        else:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task(
+                    "Fetching achievements...", total=len(played_games)
+                )
+                for i, game in enumerate(played_games):
+                    progress.update(
+                        task,
+                        description=f"Fetching achievements ({i+1}/{len(played_games)}): {game.get('name', 'Unknown')}",
+                        completed=i,
+                    )
+                    achievements = get_player_achievements(
+                        config["steam_api_key"],
+                        config["steam_id"],
+                        game["appid"],
+                    )
+                    if achievements:
+                        achievement_cache[game["appid"]] = achievements
+                    time.sleep(0.5)  # rate limit
+                progress.update(task, completed=len(played_games))
 
-        console.print(
-            f"[dim]Got achievement data for {len(achievement_cache)} games.[/dim]"
-        )
+        if not progress_callback:
+            console.print(
+                f"[dim]Got achievement data for {len(achievement_cache)} games.[/dim]"
+            )
 
         games_data = []
         for game in games:
@@ -1277,7 +1414,10 @@ def fetch_library_data(config: dict) -> list[dict]:
             games_data.append(entry)
 
         save_library_cache(config["steam_id"], games_data)
-        console.print("[dim]Library data cached for future runs.[/dim]")
+        if progress_callback:
+            progress_callback("library_status", {"message": f"Library data cached ({len(games_data)} games)"})
+        else:
+            console.print("[dim]Library data cached for future runs.[/dim]")
 
     return games_data
 

@@ -19,9 +19,9 @@ import organizer
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# ── Tooltip hints ────────────────────────────────────────────────────────────
+# ── Help button hints ────────────────────────────────────────────────────────
 
-TOOLTIP_STEAM_ID = (
+HELP_STEAM_ID = (
     "Your 64-bit Steam ID or custom profile URL name.\n\n"
     "- 64-bit ID looks like: 76561198012345678\n"
     "- Custom URL: if your profile is\n"
@@ -29,53 +29,44 @@ TOOLTIP_STEAM_ID = (
     "- Find yours at: https://steamid.io"
 )
 
-TOOLTIP_API_KEY = (
+HELP_API_KEY = (
     "Your Steam Web API key.\n\n"
-    "1. Go to https://steamcommunity.com/dev/apikey\n"
-    "2. Log in with your Steam account\n"
-    "3. Enter any domain name and click Register\n"
-    "4. Copy the key shown on the page"
+    "Get one at: https://steamcommunity.com/dev/apikey\n"
+    "(Log in, enter any domain name, click Register)"
 )
 
-class Tooltip:
-    """Hover tooltip that stays visible so users can select/copy text from it."""
 
-    def __init__(self, widget, text: str, delay: int = 400):
-        self.widget = widget
+class HelpButton:
+    """A small '?' button that toggles an info popup on click.
+
+    After creating, position with .btn.pack() or .btn.grid().
+    """
+
+    def __init__(self, parent, text: str):
         self.text = text
-        self.delay = delay
-        self._after_id = None
-        self._hide_after_id = None
-        self._tooltip_window = None
-        self._in_tooltip = False
-        widget.bind("<Enter>", self._schedule)
-        widget.bind("<Leave>", self._schedule_hide)
+        self._popup = None
+        self._bind_id = None
+        self._configure_bind_id = None
+        self._unbind_dismiss = lambda: None
+        self.btn = ctk.CTkButton(
+            parent, text="?", width=24, height=24,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#555555", hover_color="#666666",
+            corner_radius=12,
+            command=self._toggle,
+        )
 
-    def _schedule(self, event=None):
-        self._cancel_hide()
-        if not self._tooltip_window:
-            if self._after_id:
-                self.widget.after_cancel(self._after_id)
-            self._after_id = self.widget.after(self.delay, self._show)
-
-    def _schedule_hide(self, event=None):
-        """Hide after a short delay, giving time to move mouse into tooltip."""
-        self._cancel_hide()
-        self._hide_after_id = self.widget.after(300, self._hide)
-
-    def _cancel_hide(self):
-        if self._hide_after_id:
-            self.widget.after_cancel(self._hide_after_id)
-            self._hide_after_id = None
-
-    def _show(self):
-        self._after_id = None
-        if self._tooltip_window:
+    def _toggle(self):
+        if self._popup:
+            self._popup.destroy()
+            self._popup = None
+            self._unbind_dismiss()
             return
-        x = self.widget.winfo_rootx() + 20
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
 
-        self._tooltip_window = tw = tk.Toplevel(self.widget)
+        x = self.btn.winfo_rootx() + 30
+        y = self.btn.winfo_rooty() - 5
+
+        self._popup = tw = tk.Toplevel(self.btn)
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         tw.attributes("-topmost", True)
@@ -83,7 +74,6 @@ class Tooltip:
         frame = tk.Frame(tw, background="#333333", borderwidth=1, relief="solid")
         frame.pack(fill="both", expand=True)
 
-        # Use a Text widget so content is selectable/copyable
         textbox = tk.Text(
             frame, wrap="word", relief="flat", borderwidth=0,
             background="#333333", foreground="#e0e0e0",
@@ -91,13 +81,6 @@ class Tooltip:
             cursor="arrow", selectbackground="#555555",
             highlightthickness=0,
         )
-
-        # Configure link style
-        textbox.tag_configure("link", foreground="#6ea8fe", underline=True)
-        textbox.tag_bind("link", "<Enter>",
-                         lambda e: textbox.configure(cursor="hand2"))
-        textbox.tag_bind("link", "<Leave>",
-                         lambda e: textbox.configure(cursor="arrow"))
 
         # Insert text, making URLs clickable
         url_pattern = re.compile(r'(https?://\S+)')
@@ -122,29 +105,81 @@ class Tooltip:
 
         textbox.configure(state="normal")  # keep selectable
 
-        # Size the text widget to fit content
         lines = self.text.split("\n")
         width = min(max(len(line) for line in lines) + 2, 60)
         height = len(lines)
         textbox.configure(width=width, height=height)
         textbox.pack()
 
-        # Keep tooltip open while mouse is over it
-        tw.bind("<Enter>", self._on_tooltip_enter)
-        tw.bind("<Leave>", self._on_tooltip_leave)
-        frame.bind("<Enter>", self._on_tooltip_enter)
-        frame.bind("<Leave>", self._on_tooltip_leave)
-        textbox.bind("<Enter>", self._on_tooltip_enter)
-        textbox.bind("<Leave>", self._on_tooltip_leave)
+        # Close when clicking elsewhere or moving/resizing the window
+        def _dismiss(event=None):
+            if self._popup:
+                try:
+                    if event and event.type == tk.EventType.ButtonPress:
+                        px = self._popup.winfo_rootx()
+                        py = self._popup.winfo_rooty()
+                        pw = self._popup.winfo_width()
+                        ph = self._popup.winfo_height()
+                        if px <= event.x_root <= px + pw and py <= event.y_root <= py + ph:
+                            return
+                    self._popup.destroy()
+                    self._popup = None
+                    self._unbind_dismiss()
+                except tk.TclError:
+                    pass
 
-    def _on_tooltip_enter(self, event=None):
-        self._cancel_hide()
+        def _unbind():
+            root = self.btn.winfo_toplevel()
+            try:
+                if self._bind_id:
+                    root.unbind("<Button-1>", self._bind_id)
+                if self._configure_bind_id:
+                    root.unbind("<Configure>", self._configure_bind_id)
+            except tk.TclError:
+                pass
+            self._bind_id = None
+            self._configure_bind_id = None
 
-    def _on_tooltip_leave(self, event=None):
-        self._schedule_hide()
+        self._unbind_dismiss = _unbind
+        root = self.btn.winfo_toplevel()
+        self._bind_id = root.bind("<Button-1>", _dismiss, add="+")
+        self._configure_bind_id = root.bind("<Configure>", _dismiss, add="+")
 
-    def _hide(self):
-        self._hide_after_id = None
+
+class Tooltip:
+    """Simple hover tooltip for short hints (e.g. button descriptions)."""
+
+    def __init__(self, widget, text: str):
+        self.widget = widget
+        self.text = text
+        self._tooltip_window = None
+        self._after_id = None
+        widget.bind("<Enter>", self._schedule)
+        widget.bind("<Leave>", self._hide)
+
+    def _schedule(self, event=None):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+        self._after_id = self.widget.after(400, self._show)
+
+    def _show(self):
+        self._after_id = None
+        if self._tooltip_window:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self._tooltip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tw.attributes("-topmost", True)
+        label = tk.Label(tw, text=self.text, background="#333333", foreground="#e0e0e0",
+                         font=("Segoe UI", 9), padx=8, pady=4, justify="left")
+        label.pack()
+
+    def _hide(self, event=None):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
         if self._tooltip_window:
             self._tooltip_window.destroy()
             self._tooltip_window = None
@@ -477,15 +512,13 @@ class SimpleView(ctk.CTkFrame):
         self.steam_id_entry = ctk.CTkEntry(settings_frame, width=140,
                                            placeholder_text="76561198...")
         self.steam_id_entry.pack(side="left", padx=5)
+        HelpButton(settings_frame, HELP_STEAM_ID).btn.pack(side="left", padx=(0, 5))
 
-        ctk.CTkLabel(settings_frame, text="API Key:").pack(side="left", padx=(15, 5))
+        ctk.CTkLabel(settings_frame, text="API Key:").pack(side="left", padx=(10, 5))
         self.api_key_entry = ctk.CTkEntry(settings_frame, width=160,
                                           placeholder_text="Steam API Key", show="•")
         self.api_key_entry.pack(side="left", padx=5)
-
-        # Tooltips
-        Tooltip(self.steam_id_entry, TOOLTIP_STEAM_ID)
-        Tooltip(self.api_key_entry, TOOLTIP_API_KEY)
+        HelpButton(settings_frame, HELP_API_KEY).btn.pack(side="left", padx=(0, 5))
 
         # Pre-fill from saved config
         saved = parent._saved
@@ -623,6 +656,7 @@ class DetailedView(ctk.CTkFrame):
             row=0, column=0, padx=(0, 15), pady=10, sticky="e")
         self.setup_steam_id = ctk.CTkEntry(fields, width=350, placeholder_text="76561198... or vanity URL name")
         self.setup_steam_id.grid(row=0, column=1, pady=10)
+        HelpButton(fields, HELP_STEAM_ID).btn.grid(row=0, column=2, padx=(5, 0), pady=10)
         if saved.get("steam_id") or saved.get("steam_id_input"):
             self.setup_steam_id.insert(0, saved.get("steam_id") or saved.get("steam_id_input", ""))
 
@@ -630,12 +664,9 @@ class DetailedView(ctk.CTkFrame):
             row=1, column=0, padx=(0, 15), pady=10, sticky="e")
         self.setup_api_key = ctk.CTkEntry(fields, width=350, placeholder_text="From steamcommunity.com/dev/apikey", show="•")
         self.setup_api_key.grid(row=1, column=1, pady=10)
+        HelpButton(fields, HELP_API_KEY).btn.grid(row=1, column=2, padx=(5, 0), pady=10)
         if saved.get("steam_api_key"):
             self.setup_api_key.insert(0, saved["steam_api_key"])
-
-        # Tooltips
-        Tooltip(self.setup_steam_id, TOOLTIP_STEAM_ID)
-        Tooltip(self.setup_api_key, TOOLTIP_API_KEY)
 
         ctk.CTkButton(inner, text="Save Settings", width=200, height=36,
                        command=self._save_settings).pack(pady=20)

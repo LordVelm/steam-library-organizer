@@ -6,6 +6,7 @@ CustomTkinter interface with Simple and Detailed view modes.
 
 import json
 import re
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox
@@ -207,6 +208,28 @@ class SteamOrganizerApp(ctk.CTk):
         self.title("Steam Backlog Organizer")
         self.geometry("1000x720")
         self.minsize(800, 600)
+
+        # Set window/taskbar icon
+        if getattr(sys, "_MEIPASS", None):
+            icon_dir = Path(sys._MEIPASS)
+        else:
+            icon_dir = Path(__file__).parent
+
+        # Load all icon sizes
+        self._icon_images = []
+        for size in [256, 128, 64, 48, 32, 16]:
+            icon_sized = icon_dir / f"icon_{size}.png"
+            if icon_sized.exists():
+                self._icon_images.append(tk.PhotoImage(file=str(icon_sized)))
+
+        # Set icon now AND after CTk's 200ms delayed override
+        self._iconbitmap_method_called = True  # prevent CTk from overriding
+        self._apply_icon()
+        self.after(300, self._apply_icon)
+
+    def _apply_icon(self):
+        if self._icon_images:
+            self.iconphoto(True, *self._icon_images)
 
         # ── Shared state ──
         self.config = None

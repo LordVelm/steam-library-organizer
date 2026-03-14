@@ -13,6 +13,7 @@ if "--cli" in sys.argv:
             "--name=SteamBacklogOrganizer-CLI",
             "--console",
             "--clean",
+            "--icon=icon.ico",
             "--hidden-import=rich",
         ]
     )
@@ -25,7 +26,16 @@ else:
             "--name=SteamBacklogOrganizer",
             "--windowed",
             "--clean",
+            "--icon=icon.ico",
+            "--add-data=icon.ico;.",
+            "--add-data=icon_16.png;.",
+            "--add-data=icon_32.png;.",
+            "--add-data=icon_48.png;.",
+            "--add-data=icon_64.png;.",
+            "--add-data=icon_128.png;.",
+            "--add-data=icon_256.png;.",
             "--hidden-import=rich",
+            "--hidden-import=requests",
             "--hidden-import=customtkinter",
             "--collect-data=customtkinter",
         ]

@@ -20,6 +20,73 @@ import organizer
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+# ── Theme system ─────────────────────────────────────────────────────────────
+
+THEMES = {
+    "dark": {
+        "appearance": "dark",
+        # Frames / surfaces
+        "bg_frame": ("gray20", "gray20"),       # CTkFrame default
+        "bg_transparent": "transparent",
+        "bg_input": ("gray14", "gray14"),
+        # Text
+        "text_primary": "#E2E8F0",
+        "text_secondary": "gray",
+        "text_muted": "#6B7280",
+        # Buttons
+        "btn_primary_fg": "#1F6AA5",
+        "btn_primary_hover": "#144870",
+        "btn_write_fg": "#2d8a4e",
+        "btn_write_hover": "#236b3c",
+        "btn_override_fg": "#6b5b3e",
+        "btn_override_hover": "#5a4c33",
+        "btn_neutral_fg": "#4a4a4a",
+        "btn_neutral_hover": "#5a5a5a",
+        "btn_danger_fg": "#8b3a3a",
+        "btn_danger_hover": "#a04040",
+        "btn_help_fg": "#555555",
+        "btn_help_hover": "#666666",
+        # Tooltip
+        "tooltip_bg": "#333333",
+        "tooltip_fg": "#e0e0e0",
+        # Status / misc
+        "status_text": "gray",
+        "success_text": "#2d8a4e",
+    },
+    "light": {
+        "appearance": "light",
+        # Frames / surfaces
+        "bg_frame": ("gray86", "gray86"),
+        "bg_transparent": "transparent",
+        "bg_input": ("gray96", "gray96"),
+        # Text
+        "text_primary": "#111827",
+        "text_secondary": "#6B7280",
+        "text_muted": "#9CA3AF",
+        # Buttons
+        "btn_primary_fg": "#3B82F6",
+        "btn_primary_hover": "#2563EB",
+        "btn_write_fg": "#16A34A",
+        "btn_write_hover": "#15803D",
+        "btn_override_fg": "#A3873E",
+        "btn_override_hover": "#8B7333",
+        "btn_neutral_fg": "#9CA3AF",
+        "btn_neutral_hover": "#6B7280",
+        "btn_danger_fg": "#DC2626",
+        "btn_danger_hover": "#B91C1C",
+        "btn_help_fg": "#9CA3AF",
+        "btn_help_hover": "#6B7280",
+        # Tooltip
+        "tooltip_bg": "#F3F4F6",
+        "tooltip_fg": "#111827",
+        # Status / misc
+        "status_text": "#6B7280",
+        "success_text": "#16A34A",
+    },
+}
+
+T = dict(THEMES["dark"])
+
 # ── Help button hints ────────────────────────────────────────────────────────
 
 HELP_STEAM_ID = (
@@ -52,7 +119,7 @@ class HelpButton:
         self.btn = ctk.CTkButton(
             parent, text="?", width=24, height=24,
             font=ctk.CTkFont(size=12, weight="bold"),
-            fg_color="#555555", hover_color="#666666",
+            fg_color=T["btn_help_fg"], hover_color=T["btn_help_hover"],
             corner_radius=12,
             command=self._toggle,
         )
@@ -173,7 +240,7 @@ class Tooltip:
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         tw.attributes("-topmost", True)
-        label = tk.Label(tw, text=self.text, background="#333333", foreground="#e0e0e0",
+        label = tk.Label(tw, text=self.text, background=T["tooltip_bg"], foreground=T["tooltip_fg"],
                          font=("Segoe UI", 9), padx=8, pady=4, justify="left")
         label.pack()
 
@@ -247,6 +314,24 @@ class SteamOrganizerApp(ctk.CTk):
         ctk.CTkLabel(self.top_bar, text="Steam Backlog Organizer",
                      font=ctk.CTkFont(size=16, weight="bold")).pack(side="left")
 
+        # Support button
+        self.support_btn = ctk.CTkButton(
+            self.top_bar, text="☕ Support", width=90, height=28,
+            fg_color="#FFDD00", hover_color="#E5C700", text_color="#000000",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: webbrowser.open("https://buymeacoffee.com/lordvelm")
+        )
+        self.support_btn.pack(side="left", padx=(12, 0))
+
+        # Theme toggle
+        self._current_theme = "dark"
+        self.theme_btn = ctk.CTkButton(
+            self.top_bar, text="☀ Light", width=70, height=28, corner_radius=6,
+            font=ctk.CTkFont(size=11), fg_color=T["btn_neutral_fg"],
+            hover_color=T["btn_neutral_hover"], text_color=T["text_primary"],
+            command=self._toggle_theme)
+        self.theme_btn.pack(side="left", padx=(12, 0))
+
         # View toggle
         self.view_var = ctk.StringVar(value="simple")
         toggle_frame = ctk.CTkFrame(self.top_bar, fg_color="transparent")
@@ -272,6 +357,38 @@ class SteamOrganizerApp(ctk.CTk):
     def _apply_icon(self):
         if self._icon_images:
             self.iconphoto(True, *self._icon_images)
+
+    def _toggle_theme(self):
+        new = "light" if self._current_theme == "dark" else "dark"
+        self._current_theme = new
+        T.clear()
+        T.update(THEMES[new])
+        ctk.set_appearance_mode(T["appearance"])
+        self.theme_btn.configure(
+            text="☀ Light" if new == "dark" else "🌙 Dark",
+            fg_color=T["btn_neutral_fg"], hover_color=T["btn_neutral_hover"],
+            text_color=T["text_primary"],
+        )
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """Re-apply theme colors to all stored widget refs."""
+        # Simple view buttons
+        sv = self.simple_view
+        sv.classify_btn.configure(fg_color=T["btn_primary_fg"], hover_color=T["btn_primary_hover"])
+        sv.write_btn.configure(fg_color=T["btn_write_fg"], hover_color=T["btn_write_hover"])
+        sv.override_btn.configure(fg_color=T["btn_override_fg"], hover_color=T["btn_override_hover"])
+        sv.refresh_btn.configure(fg_color=T["btn_neutral_fg"], hover_color=T["btn_neutral_hover"])
+        sv.status_label.configure(text_color=T["status_text"])
+
+        # Detailed view buttons
+        dv = self.detailed_view
+        dv.classify_btn.configure(fg_color=T["btn_primary_fg"], hover_color=T["btn_primary_hover"])
+        dv.write_btn.configure(fg_color=T["btn_write_fg"], hover_color=T["btn_write_hover"])
+        dv.refresh_btn.configure(fg_color=T["btn_neutral_fg"], hover_color=T["btn_neutral_hover"])
+        dv.classify_status_label.configure(text_color=T["text_primary"])
+        if hasattr(dv, 'setup_status'):
+            dv.setup_status.configure(text_color=T["success_text"])
 
     def _toggle_view(self):
         if self.view_var.get() == "detailed":
@@ -563,20 +680,21 @@ class SimpleView(ctk.CTkFrame):
 
         self.write_btn = ctk.CTkButton(
             action_frame, text="Write to Steam", width=140, height=36,
-            fg_color="#2d8a4e", hover_color="#236b3c",
+            fg_color=T["btn_write_fg"], hover_color=T["btn_write_hover"],
             command=parent.start_write_to_steam,
         )
         self.write_btn.pack(side="left", padx=5)
 
-        ctk.CTkButton(
+        self.override_btn = ctk.CTkButton(
             action_frame, text="Overrides", width=100, height=36,
-            fg_color="#6b5b3e", hover_color="#5a4c33",
+            fg_color=T["btn_override_fg"], hover_color=T["btn_override_hover"],
             command=parent.open_override_dialog,
-        ).pack(side="left", padx=5)
+        )
+        self.override_btn.pack(side="left", padx=5)
 
         self.refresh_btn = ctk.CTkButton(
             action_frame, text="↻  Refresh", width=100, height=36,
-            fg_color="#4a4a4a", hover_color="#5a5a5a",
+            fg_color=T["btn_neutral_fg"], hover_color=T["btn_neutral_hover"],
             command=parent.start_refresh,
         )
         self.refresh_btn.pack(side="left", padx=5)
@@ -694,7 +812,7 @@ class DetailedView(ctk.CTkFrame):
         ctk.CTkButton(inner, text="Save Settings", width=200, height=36,
                        command=self._save_settings).pack(pady=20)
 
-        self.setup_status = ctk.CTkLabel(inner, text="", text_color="#2d8a4e")
+        self.setup_status = ctk.CTkLabel(inner, text="", text_color=T["success_text"])
         self.setup_status.pack()
 
     def _save_settings(self):
@@ -753,14 +871,14 @@ class DetailedView(ctk.CTkFrame):
 
         self.write_btn = ctk.CTkButton(
             btn_frame, text="Write to Steam", width=160, height=40,
-            fg_color="#2d8a4e", hover_color="#236b3c",
+            fg_color=T["btn_write_fg"], hover_color=T["btn_write_hover"],
             command=self.app.start_write_to_steam,
         )
         self.write_btn.pack(side="left", padx=10)
 
         self.refresh_btn = ctk.CTkButton(
             btn_frame, text="↻  Refresh Library", width=160, height=40,
-            fg_color="#4a4a4a", hover_color="#5a5a5a",
+            fg_color=T["btn_neutral_fg"], hover_color=T["btn_neutral_hover"],
             command=self.app.start_refresh,
         )
         self.refresh_btn.pack(side="left", padx=10)
@@ -855,7 +973,7 @@ class DetailedView(ctk.CTkFrame):
 
             ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=12)).pack(side="left", padx=5)
             if current != "—":
-                ctk.CTkLabel(row, text=f"[{current}]", text_color="#2d8a4e",
+                ctk.CTkLabel(row, text=f"[{current}]", text_color=T["success_text"],
                              font=ctk.CTkFont(size=11)).pack(side="left", padx=5)
 
             ctk.CTkButton(
@@ -899,12 +1017,12 @@ class DetailedView(ctk.CTkFrame):
                         break
 
             ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=12)).pack(side="left", padx=5)
-            ctk.CTkLabel(row, text=category, text_color="#2d8a4e",
+            ctk.CTkLabel(row, text=category, text_color=T["success_text"],
                          font=ctk.CTkFont(size=11)).pack(side="left", padx=10)
 
             ctk.CTkButton(
                 row, text="✕", width=30, height=24,
-                fg_color="#8b3a3a", hover_color="#a04040",
+                fg_color=T["btn_danger_fg"], hover_color=T["btn_danger_hover"],
                 command=lambda a=appid_str: self._remove_override(a),
             ).pack(side="right", padx=5)
 
@@ -1042,11 +1160,11 @@ class OverrideDialog(ctk.CTkToplevel):
                 name = saved[appid_int].get("name", name)
 
             ctk.CTkLabel(row, text=name, font=ctk.CTkFont(size=12)).pack(side="left")
-            ctk.CTkLabel(row, text=cat, text_color="#2d8a4e",
+            ctk.CTkLabel(row, text=cat, text_color=T["success_text"],
                          font=ctk.CTkFont(size=11)).pack(side="left", padx=10)
             ctk.CTkButton(
                 row, text="✕", width=30, height=24,
-                fg_color="#8b3a3a", hover_color="#a04040",
+                fg_color=T["btn_danger_fg"], hover_color=T["btn_danger_hover"],
                 command=lambda a=appid_str: self._remove(a),
             ).pack(side="right", padx=5)
 
